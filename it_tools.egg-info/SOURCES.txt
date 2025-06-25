@@ -9,7 +9,10 @@ it_tools.egg-info/requires.txt
 it_tools.egg-info/top_level.txt
 it_tools/autoarchiver/__init__.py
 it_tools/autoarchiver/cli.py
+it_tools/mailops/__init__.py
+it_tools/mailops/cli.py
 it_tools/patchpulse/__init__.py
 it_tools/patchpulse/cli.py
 it_tools/tonertrack/__init__.py
 it_tools/tonertrack/cli.py
+tests/test_smoke.py
