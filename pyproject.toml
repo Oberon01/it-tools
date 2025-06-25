@@ -1,0 +1,15 @@
+[project]
+name = "it-tools"
+version = "0.1.0"
+description = "Kentrell's Stage-5 IT utility suite"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]               # exposes CLI entry points
+it-autoarchiver = "it_tools.autoarchiver.cli:app"
+it-patchpulse = "it_tools.patchpulse.cli:app"
+it-tonertrack = "it_tools.tonertrack.cli:app"

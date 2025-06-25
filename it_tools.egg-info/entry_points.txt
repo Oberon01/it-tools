@@ -1,0 +1,4 @@
+[console_scripts]
+it-autoarchiver = it_tools.autoarchiver.cli:app
+it-patchpulse = it_tools.patchpulse.cli:app
+it-tonertrack = it_tools.tonertrack.cli:app
