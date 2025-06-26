@@ -1,0 +1,177 @@
+"""ADOps — Active Directory user & group manager
+==============================================
+Part of *IT-Tools* suite (module 5)
+
+MVS (minimum viable scope)
+-------------------------
+• **User commands**
+  - `user get  <sam>`      (Get-ADUser)
+  - `user new  <sam>`      (New-ADUser)  — prompts for name, OU, etc.
+  - `user set  <sam>`      (Set-ADUser)  — --email, --title, --enabled/--disabled
+  - `user del  <sam>`      (Remove-ADUser)
+
+• **Group commands**
+  - `group get  <name>`    (Get-ADGroup)
+  - `group new  <name>`    (New-ADGroup)
+  - `group del  <name>`    (Remove-ADGroup)
+  - `group add-member <grp> <sam>`   (Add-ADGroupMember)
+  - `group rm-member  <grp> <sam>`   (Remove-ADGroupMember)
+
+Prerequisites
+-------------
+* Must run on a machine with RSAT **ActiveDirectory** PowerShell module
+  (Windows desktop joined to the domain or a management server).
+* Use current credentials (Kerberos). No special auth handling in MVS.
+
+Stretch goals
+-------------
+• CSV bulk operations (`adops user bulk users.csv`).
+• Automatically create home folders, mailbox-enable users, etc.
+• Use LDAP libraries (python-ldap) for cross-platform execution.
+"""
+
+from __future__ import annotations
+import logging
+import subprocess
+from pathlib import Path
+from typing import Optional
+import typer
+from rich.console import Console
+from rich.table import Table
+
+APP_VERSION = "0.1.0"
+app = typer.Typer(add_completion=False, help="ADOps - Active Directory CLI")
+console = Console()
+
+# --------------------------- helper ----------------------------------------
+
+
+def run_ps(cmd: str) -> str:
+    """Run *cmd* in PowerShell (requires ActiveDirectory module)."""
+    full = (
+        "$PSStyle.OutputRendering='PlainText';"
+        "Import-Module ActiveDirectory; "
+        "Clear-Host;"
+        + cmd
+    )
+    proc = subprocess.run([
+        "pwsh",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        full,
+    ], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip())
+    return proc.stdout.strip()
+
+
+# --------------------------- user commands ---------------------------------
+
+user_cli = typer.Typer(help="User management")
+app.add_typer(user_cli, name="user")
+
+
+@user_cli.command("get")
+def user_get(sam: str = typer.Argument(..., help="SAMAccountName")):
+    out = run_ps(f"Get-ADUser -Identity '{sam}' -Properties mail,title,Enabled | Format-List")
+    console.print(out)
+
+
+@user_cli.command("new")
+def user_new(
+    sam: str = typer.Argument(..., help="sAMAccountName"),
+    name: str = typer.Option(..., "--name", prompt=True),
+    ou: str = typer.Option("", "--ou", help="Target OU distinguishedName"),
+    email: str = typer.Option("", "--email"),
+    title: str = typer.Option("", "--title"),
+    manager: str = typer.Option("", "--manager")
+):
+    parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}'"]
+    if ou:
+        parts.append(f"-Path '{ou}'")
+    if email:
+        parts.append(f"-EmailAddress '{email}'")
+    if title:
+        parts.append(f"-Title '{title}'")
+    if manager:
+        parts.append(f"-Manager '{manager}'")
+    ps = " ".join(parts)
+    run_ps(ps)
+    console.print(f"[green]Created user {sam}")
+
+
+@user_cli.command("set")
+def user_set(
+    sam: str = typer.Argument(...),
+    email: Optional[str] = typer.Option(None, "--email"),
+    title: Optional[str] = typer.Option(None, "--title"),
+    enable: bool = typer.Option(False, "--enable", help="Enable account"),
+    disable: bool = typer.Option(False, "--disable", help="Disable account"),
+):
+    parts = [f"Set-ADUser -Identity '{sam}'"]
+    if email:
+        parts.append(f"-EmailAddress '{email}'")
+    if title:
+        parts.append(f"-Title '{title}'")
+    if enable:
+        parts.append("-Enabled $true")
+    if disable:
+        parts.append("-Enabled $false")
+    run_ps(" ".join(parts))
+    console.print(f"[green]Updated user {sam}")
+
+
+@user_cli.command("del")
+def user_del(sam: str = typer.Argument(...)):
+    run_ps(f"Remove-ADUser -Identity '{sam}' -Confirm:$false")
+    console.print(f"[green]Deleted user {sam}")
+
+
+# --------------------------- group commands --------------------------------
+
+group_cli = typer.Typer(help="Group management")
+app.add_typer(group_cli, name="group")
+
+
+@group_cli.command("get")
+def group_get(name: str = typer.Argument(...)):
+    out = run_ps(f"Get-ADGroup -Identity '{name}' | Format-List")
+    console.print(out)
+
+
+@group_cli.command("new")
+def group_new(name: str = typer.Argument(...), scope: str = typer.Option("Global", "--scope", help="Global|Universal|DomainLocal")):
+    run_ps(f"New-ADGroup -Name '{name}' -GroupScope {scope}")
+    console.print(f"[green]Created group {name}")
+
+
+@group_cli.command("del")
+def group_del(name: str = typer.Argument(...)):
+    run_ps(f"Remove-ADGroup -Identity '{name}' -Confirm:$false")
+    console.print(f"[green]Deleted group {name}")
+
+
+@group_cli.command("add-member")
+def add_member(group: str = typer.Argument(...), sam: str = typer.Argument(...)):
+    run_ps(f"Add-ADGroupMember -Identity '{group}' -Members '{sam}'")
+    console.print(f"[green]Added {sam} to {group}")
+
+
+@group_cli.command("rm-member")
+def rm_member(group: str = typer.Argument(...), sam: str = typer.Argument(...)):
+    run_ps(f"Remove-ADGroupMember -Identity '{group}' -Members '{sam}' -Confirm:$false")
+    console.print(f"[green]Removed {sam} from {group}")
+
+
+# --------------------------- misc ------------------------------------------
+
+@app.command()
+def version():
+    console.print(APP_VERSION)
+
+
+if __name__ == "__main__":
+    from typer import run
+
+    run(app)

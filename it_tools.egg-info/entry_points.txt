@@ -1,4 +1,5 @@
 [console_scripts]
+it-adops = it_tools.adops.cli:app
 it-autoarchiver = it_tools.autoarchiver.cli:app
 it-mailops = it_tools.mailops.cli:app
 it-patchpulse = it_tools.patchpulse.cli:app

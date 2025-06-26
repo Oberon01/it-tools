@@ -7,6 +7,8 @@ it_tools.egg-info/dependency_links.txt
 it_tools.egg-info/entry_points.txt
 it_tools.egg-info/requires.txt
 it_tools.egg-info/top_level.txt
+it_tools/adops/__init__.py
+it_tools/adops/cli.py
 it_tools/autoarchiver/__init__.py
 it_tools/autoarchiver/cli.py
 it_tools/mailops/__init__.py

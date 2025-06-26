@@ -1,39 +1,37 @@
-"""MailOps — Exchange‑online admin helpers
+"""MailOps — Exchange-online admin helpers
 =======================================
-Part of *IT‑Tools* suite (module 4)
+Part of *IT-Tools* suite (module 4)
 
-This wraps common PowerShell snippets you already run (Block Emails, mailbox
+This wraps common PowerShell snippets you already run (Block Emails, mailbox
 permissions, message trace) behind a single, portable Python CLI.
 
 MVS (minimum viable scope)
 -------------------------
-* **Prerequisite**: `Connect‑ExchangeOnline` running in the same PowerShell
+* **Prerequisite**: `Connect-ExchangeOnline` running in the same PowerShell
   session (or use `-Connect` flag to let MailOps open a session for you).
-* **Sub‑commands**
+* **Sub-commands**
   • `block`         → add sender(s) to a Hosted Content Filter policy.
-  • `grant`         → Add‑MailboxPermission (full) or Add‑RecipientPermission (SendAs).
-  • `trace`         → Get‑MessageTrace filtered by sender / recipient.
+  • `grant`         → Add-MailboxPermission (full) or Add-RecipientPermission (SendAs).
+  • `trace`         → Get-MessageTrace filtered by sender / recipient.
 * **Logging**: JSON Lines (`mailops.log`) with timestamp + action + target.
 
 Stretch ideas
 -------------
 • Bulk CSV input (multiple grants or blocks).
-• Graph REST calls instead of WinRM for MFA‑friendly auth.
+• Graph REST calls instead of WinRM for MFA-friendly auth.
 • Prometheus counter (blocks_total, grants_total)."""
 
 from __future__ import annotations
-
 import json
 import logging
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-
 import typer
 
-APP_VERSION = "0.1.0"
-app = typer.Typer(add_completion=False, help="MailOps – Exchange‑Online admin CLI")
+APP_VERSION = "0.1.1"
+app = typer.Typer(add_completion=False, help="MailOps - Exchange-Online admin CLI")
 LOG = logging.getLogger("mailops")
 
 LOG_FILE = Path("mailops.log")
@@ -55,7 +53,7 @@ def run_ps(cmd: str) -> str:
 
 def ensure_connection(tenant: Optional[str] = None):
     """Connect to Exchange Online if not already connected."""
-    cmd = "if (-not (Get-ConnectionInformation)) { Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName kmadmin@beautymanufacture.com"  # noqa: E501
+    cmd = "if (-not (Get-ConnectionInformation)) { Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> "  # noqa: E501
     if tenant:
         cmd += f" -Organization '{tenant}'"
     cmd += " }"
@@ -75,7 +73,7 @@ def _common(
     connect: bool = typer.Option(False, "--connect", help="Connect to Exchange Online first."),
     tenant: Optional[str] = typer.Option(None, "--tenant", help="Tenant domain if using delegated admin"),
 ):
-    """Shared options for all sub‑commands."""
+    """Shared options for all sub-commands."""
     if connect:
         typer.echo("Connecting to Exchange Online …")
         ensure_connection(tenant)
@@ -86,10 +84,11 @@ def block(
     sender: str = typer.Argument(..., help="Email address to block"),
     policy: str = typer.Option("Default", "--policy", help="Hosted content filter policy name"),
 ):
-    """Add *SENDER* to the block‑list of *POLICY*."""
+    """Add *SENDER* to the block-list of *POLICY*."""
     ps = (
-        f"Set-HostedContentFilterPolicy -Identity '{policy}' "
-        f"-BlockedSenders @('{{{sender}}}')"
+        f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; New-TenantAllowBlockListItems -ListType Sender -Block -Entries {sender} -NoExpiration -ErrorAction Stop"
+        # f"Set-HostedContentFilterPolicy -Identity '{policy}' "
+        # f"-BlockedSenders @('{{{sender}}}')"
     )
     run_ps(ps)
     typer.secho(f"Blocked {sender} in policy {policy}", fg=typer.colors.GREEN)
@@ -116,9 +115,9 @@ def grant(
 def trace(
     sender: Optional[str] = typer.Option(None, "--sender", help="Filter by sender address"),
     recipient: Optional[str] = typer.Option(None, "--recipient", help="Filter by recipient address"),
-    days: int = typer.Option(1, help="How many days back"),
+    days: int = typer.Option(9, help="How many days back"),
 ):
-    """Run Get‑MessageTrace with sender/recipient filters."""
+    """Run Get-MessageTrace with sender/recipient filters."""
     if not sender and not recipient:
         typer.secho("Provide --sender or --recipient", fg=typer.colors.RED)
         raise typer.Exit(1)
@@ -127,12 +126,14 @@ def trace(
     filters = []
     if sender:
         filters.append(f"-SenderAddress '{sender}'")
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\SEND-{sender.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
     if recipient:
         filters.append(f"-RecipientAddress '{recipient}'")
-    ps = f"Get-MessageTrace -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} | Format-Table"
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\REC-{recipient.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
+    # ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\{recipient.split("@")[0]}{datetime.now()}.csv"
     output = run_ps(ps)
     typer.echo(output)
-    log_action("trace", {"sender": sender, "recipient": recipient, "days": days})
+    log_action("trace", {"sender": sender, "recipient": recipient, "days": days, "result_size": 1000})
 
 
 @app.command()
