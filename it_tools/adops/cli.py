@@ -38,6 +38,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.table import Table
+from it_tools.common.env import env
 
 APP_VERSION = "0.1.0"
 app = typer.Typer(add_completion=False, help="ADOps - Active Directory CLI")
@@ -73,29 +74,34 @@ app.add_typer(user_cli, name="user")
 
 
 @user_cli.command("get")
-def user_get(sam: str = typer.Argument(..., help="SAMAccountName")):
-    out = run_ps(f"Get-ADUser -Identity '{sam}' -Properties mail,title,Enabled | Format-List")
-    console.print(out)
-
+def user_get(
+    sam: str = typer.Argument(..., help="SAMAccountName"),
+    bulk: bool = typer.Option(False, "--bulk", help="Retrieve accounts in bulk")
+    ):
+    out = run_ps(f"Get-ADUser -Identity '{sam}' -Properties mail,title,Enabled,Manager | Format-List")
+    print(f"\nAccount Information: {sam.upper()}\n\n{out}\n")
 
 @user_cli.command("new")
 def user_new(
-    sam: str = typer.Argument(..., help="sAMAccountName"),
+    sam: str = typer.Argument(..., help="SAMAccountName"),
     name: str = typer.Option(..., "--name", prompt=True),
     ou: str = typer.Option("", "--ou", help="Target OU distinguishedName"),
-    email: str = typer.Option("", "--email"),
-    title: str = typer.Option("", "--title"),
-    manager: str = typer.Option("", "--manager")
+    # email: str = typer.Option("", "--email", help="Email address for user"),
+    title: str = typer.Option("", "--title", help="User's Job Role"),
+    manager: str = typer.Option("", "--manager", help="Reporting Manager (Use SamAccountName)"),
+    dept: str = typer.Option("", "--dept", help="User's Department")
 ):
-    parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}'"]
+    parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}' -EmailAddress '{sam}@beautymanufacture.com' -GivenName '{name.split(" ")[0]}' -Surname '{name.split(" ")[1]}' -DisplayName '{name}' -UserPrincipalName '{sam}@beautymanufacture.com' -Enabled $true -Credential {env('AD_CRED')} -AccountPassword (ConvertTo-SecureString -AsPlainText 'Summerful7!' -Force)"]
     if ou:
-        parts.append(f"-Path '{ou}'")
-    if email:
-        parts.append(f"-EmailAddress '{email}'")
+        parts.append(f"-Path 'OU=B1-{ou},OU=Active,OU=BMSC1,OU=Domain Users,DC=bmsc1,DC=local'")
+    # if email:
+        # parts.append(f"-EmailAddress '{sam}@beautymanufacture.com'")
     if title:
         parts.append(f"-Title '{title}'")
     if manager:
         parts.append(f"-Manager '{manager}'")
+    if dept:
+        parts.append(f"-Department '{dept}'")
     ps = " ".join(parts)
     run_ps(ps)
     console.print(f"[green]Created user {sam}")
@@ -142,25 +148,25 @@ def group_get(name: str = typer.Argument(...)):
 
 @group_cli.command("new")
 def group_new(name: str = typer.Argument(...), scope: str = typer.Option("Global", "--scope", help="Global|Universal|DomainLocal")):
-    run_ps(f"New-ADGroup -Name '{name}' -GroupScope {scope}")
+    run_ps(f"New-ADGroup -Name '{name}' -GroupScope {scope} -Credential {env('AD_CRED')}")
     console.print(f"[green]Created group {name}")
 
 
 @group_cli.command("del")
 def group_del(name: str = typer.Argument(...)):
-    run_ps(f"Remove-ADGroup -Identity '{name}' -Confirm:$false")
+    run_ps(f"Remove-ADGroup -Identity '{name}' -Credential {env('AD_CRED')} -Confirm:$false")
     console.print(f"[green]Deleted group {name}")
 
 
 @group_cli.command("add-member")
 def add_member(group: str = typer.Argument(...), sam: str = typer.Argument(...)):
-    run_ps(f"Add-ADGroupMember -Identity '{group}' -Members '{sam}'")
+    run_ps(f"Add-ADGroupMember -Identity '{group}' -Members '{sam}' -Credential {env('AD_CRED')}")
     console.print(f"[green]Added {sam} to {group}")
 
 
 @group_cli.command("rm-member")
 def rm_member(group: str = typer.Argument(...), sam: str = typer.Argument(...)):
-    run_ps(f"Remove-ADGroupMember -Identity '{group}' -Members '{sam}' -Confirm:$false")
+    run_ps(f"Remove-ADGroupMember -Identity '{group}' -Members '{sam}' -Credential {env('AD_CRED')} -Confirm:$false")
     console.print(f"[green]Removed {sam} from {group}")
 
 
@@ -168,7 +174,7 @@ def rm_member(group: str = typer.Argument(...), sam: str = typer.Argument(...)):
 
 @app.command()
 def version():
-    console.print(APP_VERSION)
+    console.print(f"ADOps v{APP_VERSION}")
 
 
 if __name__ == "__main__":

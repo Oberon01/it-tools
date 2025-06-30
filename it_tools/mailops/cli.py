@@ -24,12 +24,16 @@ Stretch ideas
 from __future__ import annotations
 import json
 import logging
+import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 import typer
-
+from dotenv import load_dotenv
+from it_tools.common.env import env
+SESSION_START = "Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')};"
+SESSION = ""
 APP_VERSION = "0.1.1"
 app = typer.Typer(add_completion=False, help="MailOps - Exchange-Online admin CLI")
 LOG = logging.getLogger("mailops")
@@ -37,6 +41,9 @@ LOG = logging.getLogger("mailops")
 LOG_FILE = Path("mailops.log")
 
 # ----------------------------- helpers --------------------------------------
+
+def env(key: str, default=None):
+    return os.getenv(key, default)
 
 def run_ps(cmd: str) -> str:
     """Invoke a PowerShell command and capture stdout (raise on error)."""
@@ -53,7 +60,8 @@ def run_ps(cmd: str) -> str:
 
 def ensure_connection(tenant: Optional[str] = None):
     """Connect to Exchange Online if not already connected."""
-    cmd = "if (-not (Get-ConnectionInformation)) { Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> "  # noqa: E501
+    # REMOVE USERNAME WHEN UPLOADING
+    cmd = "if (-not (Get-ConnectionInformation)) { Connect-ExchangeOnline -ShowBanner:$false"  # noqa: E501
     if tenant:
         cmd += f" -Organization '{tenant}'"
     cmd += " }"
@@ -86,7 +94,7 @@ def block(
 ):
     """Add *SENDER* to the block-list of *POLICY*."""
     ps = (
-        f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; New-TenantAllowBlockListItems -ListType Sender -Block -Entries {sender} -NoExpiration -ErrorAction Stop"
+        f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; New-TenantAllowBlockListItems -ListType Sender -Block -Entries {sender} -NoExpiration -ErrorAction Stop"
         # f"Set-HostedContentFilterPolicy -Identity '{policy}' "
         # f"-BlockedSenders @('{{{sender}}}')"
     )
@@ -103,13 +111,22 @@ def grant(
 ):
     """Grant FullAccess or SendAs to *USER* on *MAILBOX*."""
     if access.lower() == "full":
-        ps = f"Add-MailboxPermission -Identity '{mailbox}' -User '{user}' -AccessRights FullAccess -AutoMapping:$false"
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Add-MailboxPermission -Identity '{mailbox}' -User '{user}' -AccessRights FullAccess -AutoMapping:$false"
     else:
-        ps = f"Add-RecipientPermission -Identity '{mailbox}' -Trustee '{user}' -AccessRights SendAs"
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Add-RecipientPermission -Identity '{mailbox}' -Trustee '{user}' -AccessRights SendAs"
     run_ps(ps)
     typer.secho(f"Granted {access} to {user} on {mailbox}", fg=typer.colors.GREEN)
     log_action("grant", {"mailbox": mailbox, "user": user, "access": access})
 
+@app.command()
+def permissions(
+    mailbox: str = typer.Argument(..., help="Target mailbox (primary SMTP/UPN)"),
+):
+    """Check Permissions for target *MAILBOX*. """
+    ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Get-MailboxPermission -Identity '{mailbox}' | Export-Csv $env:USERPROFILE\\exports\\PERM-{mailbox}_{datetime.now().strftime("%d%b")}.csv"
+    run_ps(ps)
+    typer.secho(f"Users with access to {mailbox}:")
+    log_action("check", {"mailbox": mailbox})
 
 @app.command()
 def trace(
@@ -126,11 +143,11 @@ def trace(
     filters = []
     if sender:
         filters.append(f"-SenderAddress '{sender}'")
-        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\SEND-{sender.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\SEND-{sender.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
     if recipient:
         filters.append(f"-RecipientAddress '{recipient}'")
-        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\REC-{recipient.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
-    # ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName <username> ; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\{recipient.split("@")[0]}{datetime.now()}.csv"
+        ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\REC-{recipient.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
+    # ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName kmadmin@beautymanufacture.com; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\{recipient.split("@")[0]}{datetime.now()}.csv"
     output = run_ps(ps)
     typer.echo(output)
     log_action("trace", {"sender": sender, "recipient": recipient, "days": days, "result_size": 1000})
@@ -139,7 +156,7 @@ def trace(
 @app.command()
 def version():
     """Print MailOps version."""
-    typer.echo(APP_VERSION)
+    typer.echo(f"MailOps v{APP_VERSION}")
 
 
 if __name__ == "__main__":

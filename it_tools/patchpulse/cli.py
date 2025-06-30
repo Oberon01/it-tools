@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import typer
+from dotenv import load_dotenv
+from it_tools.common.env import env
 
 try:
     import paramiko  # type: ignore
@@ -90,7 +92,7 @@ def scan_windows(target: Host) -> dict:
     """Return dict with patch count for a Windows host."""
     # Quick+dirty: count needed updates via Get-WindowsUpdate (requires PSWindowsUpdate)
     ps_script = (
-        f"Invoke-Command -ComputerName {target.host} -ScriptBlock {{ 'Import-Module PSWindowsUpdate; (Get-WindowsUpdate -IsInstalled:$false).Count' }} -Credential bmsc1\\kmadmin"
+        f"Invoke-Command -ComputerName {target.host} -ScriptBlock {{ 'Import-Module PSWindowsUpdate; (Get-WindowsUpdate -IsInstalled:$false).Count' }} -Credential {env('AD_CRED')}"
     )
     try:
         output = _run_ps_remoting(target, ps_script).strip()

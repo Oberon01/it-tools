@@ -11,6 +11,7 @@ it_tools/adops/__init__.py
 it_tools/adops/cli.py
 it_tools/autoarchiver/__init__.py
 it_tools/autoarchiver/cli.py
+it_tools/common/env.py
 it_tools/mailops/__init__.py
 it_tools/mailops/cli.py
 it_tools/patchpulse/__init__.py
