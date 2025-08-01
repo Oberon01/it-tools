@@ -89,7 +89,8 @@ def user_new(
     # email: str = typer.Option("", "--email", help="Email address for user"),
     title: str = typer.Option("", "--title", help="User's Job Role"),
     manager: str = typer.Option("", "--manager", help="Reporting Manager (Use SamAccountName)"),
-    dept: str = typer.Option("", "--dept", help="User's Department")
+    dept: str = typer.Option("", "--dept", help="User's Department"),
+    comp: str = typer.Option("", "--comp", help="User's Company (BMSC or Alliance)")
 ):
     parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}' -EmailAddress '{sam}@beautymanufacture.com' -GivenName '{name.split(" ")[0]}' -Surname '{name.split(" ")[1]}' -DisplayName '{name}' -UserPrincipalName '{sam}@beautymanufacture.com' -Enabled $true -Credential {env('AD_CRED')} -AccountPassword (ConvertTo-SecureString -AsPlainText 'Summerful7!' -Force)"]
     if ou:
@@ -112,14 +113,17 @@ def user_set(
     sam: str = typer.Argument(...),
     email: Optional[str] = typer.Option(None, "--email"),
     title: Optional[str] = typer.Option(None, "--title"),
+    comp: Optional[str] = typer.Option(None, "--comp"),
     enable: bool = typer.Option(False, "--enable", help="Enable account"),
     disable: bool = typer.Option(False, "--disable", help="Disable account"),
 ):
-    parts = [f"Set-ADUser -Identity '{sam}'"]
+    parts = [f"Set-ADUser -Identity '{sam}' -Credential {env('AD_CRED')}"]
     if email:
         parts.append(f"-EmailAddress '{email}'")
     if title:
         parts.append(f"-Title '{title}'")
+    if comp:
+        parts.append(f"-Company '{comp}'")
     if enable:
         parts.append("-Enabled $true")
     if disable:

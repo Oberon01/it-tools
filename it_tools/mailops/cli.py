@@ -95,8 +95,6 @@ def block(
     """Add *SENDER* to the block-list of *POLICY*."""
     ps = (
         f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; New-TenantAllowBlockListItems -ListType Sender -Block -Entries {sender} -NoExpiration -ErrorAction Stop"
-        # f"Set-HostedContentFilterPolicy -Identity '{policy}' "
-        # f"-BlockedSenders @('{{{sender}}}')"
     )
     run_ps(ps)
     typer.secho(f"Blocked {sender} in policy {policy}", fg=typer.colors.GREEN)
@@ -147,11 +145,18 @@ def trace(
     if recipient:
         filters.append(f"-RecipientAddress '{recipient}'")
         ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\REC-{recipient.split("@")[0]}_{datetime.now().strftime("%d%b")}.csv"
-    # ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName kmadmin@beautymanufacture.com; Get-MessageTraceV2 -StartDate '{start}' -EndDate '{end}' {' '.join(filters)} -ResultSize 1000 | Export-Csv $env:USERPROFILE\\exports\\{recipient.split("@")[0]}{datetime.now()}.csv"
     output = run_ps(ps)
     typer.echo(output)
     log_action("trace", {"sender": sender, "recipient": recipient, "days": days, "result_size": 1000})
 
+@app.command()
+def mailsize (
+    usr: str = typer.Argument(..., help="Target User email")
+):
+    """Check Size of target *MAILBOX* """
+    ps = f"Import-Module ExchangeOnlineManagement; Connect-ExchangeOnline -ShowBanner:$false -UserPrincipalName {env('ADMIN_KM')}; $usr = Get-MailboxFolderStatistics -Identity {usr}; $output = $usr | Select Name,FolderSize| ConvertTo-Json; Add-Content {usr}_mailboxSize.json -Value $output"
+    output = run_ps(ps)
+    typer.secho(f"{usr} Mailbox Size calculated")
 
 @app.command()
 def version():
