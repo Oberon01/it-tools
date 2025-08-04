@@ -133,16 +133,16 @@ def search_user():
             formatted = f"[ERROR] {user_data['error']}"
         else:
             formatted = (
-                f"Name: {user_data.get('Name', 'N/A')}\n"
-                f"Enabled: {user_data.get('Enabled', 'N/A')}\n"
-                f"Created: {user_data.get('Created', 'N/A')}\n"
-                f"Password Last Set: {user_data.get('PasswordLastSet', 'N/A')}\n"
-                f"Department: {user_data.get('Department', 'N/A')}\n"
-                f"Email: {user_data.get('Email', 'N/A')}\n"
-                f"Title: {user_data.get('Title', 'N/A')}\n"
-                f"SAM: {user_data.get('SAM', 'N/A')}\n"
-                f"UPN: {user_data.get('UPN', 'N/A')}\n"
-                f"Manager: {user_data.get('Manager', 'N/A')}"
+                f"Name:\t\t {user_data.get('Name', 'N/A')}\n"
+                f"Enabled:\t\t {user_data.get('Enabled', 'N/A')}\n"
+                f"Created:\t\t {user_data.get('Created', 'N/A')}\n"
+                f"Password Set:\t\t {user_data.get('PasswordLastSet', 'N/A')}\n"
+                f"Department:\t\t {user_data.get('Department', 'N/A')}\n"
+                f"Email:\t\t {user_data.get('Email', 'N/A')}\n"
+                f"Title:\t\t {user_data.get('Title', 'N/A')}\n"
+                f"SAM:\t\t {user_data.get('SAM', 'N/A')}\n"
+                f"UPN:\t\t {user_data.get('UPN', 'N/A')}\n"
+                f"Manager:\t\t {user_data.get('Manager', 'N/A')}"
             )
     except json.JSONDecodeError:
         formatted = "PowerShell output could not be parsed:\n\n" + output
