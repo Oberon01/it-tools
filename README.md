@@ -46,3 +46,13 @@ It provides live SNMP-based monitoring of networked printers, including **toner/
 1. Install dependencies:
    ```bash
    pip install customtkinter pysnmp
+    ```
+2. Navigate to `tonertrack` folder in the `it-tools` repo:
+    ```bash
+    cd it-tools/tonertrack
+    ```
+3. Run the GUI:
+    ```bash
+    python gui.py
+    ```
+
