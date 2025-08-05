@@ -1,104 +1,295 @@
-import json
 import customtkinter as ctk
-from tkinter import messagebox
+import tkinter as tk
+import threading
+import json
+from datetime import datetime
+from snmp_utils import get_printer_status
 
-DB_FILE = "printers.json"
+DB_FILE = "printers_upgraded.json"
 
-# ---------------------- Utility Functions ----------------------
 
-def load_db():
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
+class TonerTrackGUI(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("TonerTrack")
+        self.geometry("1100x600")
 
-def save_db(data):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        self._spinner_running = False
+        self._polling_in_progress = False
+        self.spinner_angle = 0
 
-def find_printer(data, name):
-    for rec in data:
-        if rec["name"].lower() == name.lower():
-            return rec
-    return None
+        self.load_printer_data()
+        self.build_layout()
+        self.display_printer_list()
 
-def refresh_table(table, data):
-    for widget in table.winfo_children():
-        widget.destroy()
+        # Start auto-poll after 2 seconds, repeat every 5 minutes
+        self.auto_poll_interval = 5 * 60 * 1000
+        self.after(2000, self.auto_poll_cycle)
 
-    headers = ["Name", "IP", "Model", "Toner", "Location"]
+    # ---------------- Layout ----------------
+    def build_layout(self):
+        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_frame.pack(fill="both", expand=True)
 
-    # Enable equal width stretching
-    for i in range(len(headers)):
-        table.grid_columnconfigure(i, weight=1)
+        # Left pane - Printers list
+        self.left_frame = ctk.CTkFrame(self.main_frame, width=220)
+        self.left_frame.pack(side="left", fill="y")
 
-    for i, header in enumerate(headers):
-        ctk.CTkLabel(table, text=header, font=ctk.CTkFont(weight="bold")).grid(
-            row=0, column=i, padx=5, pady=5, sticky="ew"
+        # Search
+        self.search_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Search printers...")
+        self.search_entry.pack(padx=10, pady=(10, 5), fill="x")
+        self.search_entry.bind("<KeyRelease>", lambda e: self.display_printer_list())
+
+        # Printer listbox
+        self.printer_listbox = tk.Listbox(self.left_frame, height=20)
+        self.printer_listbox.pack(padx=10, pady=5, fill="both", expand=True)
+        self.printer_listbox.bind("<<ListboxSelect>>", self.on_printer_select)
+
+        # Add/Delete buttons
+        self.add_button = ctk.CTkButton(self.left_frame, text="Add Printer", command=self.add_printer_popup)
+        self.add_button.pack(padx=10, pady=(5, 2), fill="x")
+        self.delete_button = ctk.CTkButton(self.left_frame, text="Delete Printer", command=self.delete_printer)
+        self.delete_button.pack(padx=10, pady=(0, 10), fill="x")
+
+        # Center pane - Printer details
+        self.center_frame = ctk.CTkFrame(self.main_frame)
+        self.center_frame.pack(side="left", fill="both", expand=True)
+
+        self.detail_text = ctk.CTkTextbox(self.center_frame, wrap="word")
+        self.detail_text.pack(padx=10, pady=10, fill="both", expand=True)
+
+        # Right pane - Errors/alerts
+        self.right_frame = ctk.CTkFrame(self.main_frame, width=280)
+        self.right_frame.pack(side="right", fill="y")
+
+        self.error_label = ctk.CTkLabel(self.right_frame, text="Active Alerts", font=ctk.CTkFont(size=16, weight="bold"))
+        self.error_label.pack(pady=(10, 5))
+
+        self.error_textbox = ctk.CTkTextbox(self.right_frame, wrap="word")
+        self.error_textbox.pack(padx=10, pady=5, fill="both", expand=True)
+
+        # Refresh button + spinner
+        self.button_frame = ctk.CTkFrame(self.center_frame, fg_color="transparent")
+        self.button_frame.pack(pady=(0, 10))
+
+        self.refresh_button = ctk.CTkButton(
+            self.button_frame, text="🔄 Refresh Now", command=self.refresh_all_printers
         )
+        self.refresh_button.pack(side="left", padx=(0, 5))
 
-    for row_idx, rec in enumerate(data, start=1):
-        for col_idx, key in enumerate(["name", "ip", "model", "toner", "location"]):
-            ctk.CTkLabel(table, text=rec.get(key, "")).grid(
-                row=row_idx, column=col_idx, padx=5, pady=2, sticky="ew"
-            )
+        # Spinner canvas with safe bg color
+        bg_color = self.button_frame.cget("fg_color")
+        if isinstance(bg_color, tuple):
+            bg_color = bg_color[1]
+        if bg_color == "transparent":
+            bg_color = "#2B2B2B"
 
-# ------------------------ GUI Setup ------------------------
+        self.spinner_canvas = tk.Canvas(
+            self.button_frame, width=16, height=16, highlightthickness=0, bg=bg_color
+        )
+        self.spinner_canvas.pack(side="left", padx=(5, 0))
 
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+    # ---------------- Data Handling ----------------
+    def load_printer_data(self):
+        try:
+            with open(DB_FILE, "r") as f:
+                self.printer_data = json.load(f)
+        except FileNotFoundError:
+            self.printer_data = {}
 
-app = ctk.CTk()
-app.title("TonerTrack GUI")
-app.geometry("900x700")
+    def save_printer_data(self):
+        with open(DB_FILE, "w") as f:
+            json.dump(self.printer_data, f, indent=2)
 
-inputs = {}
-fields = ["Name", "IP", "Model", "Toner", "Location"]
+    # ---------------- Polling ----------------
+    def refresh_all_printers(self):
+        if self._polling_in_progress:
+            print("⚠ Restarting poll...")
+            self._spinner_running = False
+            self._polling_in_progress = False
 
-frame_inputs = ctk.CTkFrame(app)
-frame_inputs.pack(pady=10, padx=10, fill="x")
+        self._polling_in_progress = True
+        self._spinner_running = True
+        self.animate_spinner()
+        self.refresh_button.configure(state="disabled")
+        threading.Thread(target=self._poll_all_printers, daemon=True).start()
 
-for idx, label in enumerate(fields):
-    ctk.CTkLabel(frame_inputs, text=label).grid(row=0, column=idx, padx=5)
-    entry = ctk.CTkEntry(frame_inputs, width=140)
-    entry.grid(row=1, column=idx, padx=5)
-    inputs[label.lower()] = entry
+    def auto_poll_cycle(self):
+        self.refresh_all_printers()
+        self.after(self.auto_poll_interval, self.auto_poll_cycle)
 
-def clear_inputs():
-    for entry in inputs.values():
-        entry.delete(0, 'end')
+    def _poll_all_printers(self):
+        updated_data = {}
+        for ip, data in self.printer_data.items():
+            print(f"📡 Polling {ip}...")
+            try:
+                status = get_printer_status(ip)
+                updated_data[ip] = {
+                    **data,
+                    "model": status.get("Model"),
+                    "serial": status.get("Serial Number"),
+                    "Toner Cartridges": status.get("Toner Cartridges", {}),
+                    "Drum Units": status.get("Drum Units", {}),
+                    "Other": status.get("Other", {}),
+                    "Errors": status.get("Errors", {}),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+            except Exception as e:
+                print(f"❌ Failed to poll {ip}: {e}")
+                updated_data[ip] = {**data, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-def add_or_update():
-    record = {k: v.get().strip() for k, v in inputs.items()}
-    if not record["name"]:
-        messagebox.showerror("Error", "Printer name is required.")
-        return
-    data = load_db()
-    existing = find_printer(data, record["name"])
-    if existing:
-        for k, v in record.items():
-            if v:  # only update non-empty fields
-                existing[k] = v
-        msg = f"Updated printer '{record['name']}'."
-    else:
-        data.append(record)
-        msg = f"Added new printer '{record['name']}'."
-    save_db(data)
-    refresh_table(table_frame, data)
-    messagebox.showinfo("Success", msg)
-    clear_inputs()
+        self.printer_data = updated_data
+        self.save_printer_data()
+        self.after(100, self._post_poll_ui_refresh)
 
-button_frame = ctk.CTkFrame(app, fg_color="transparent")
-button_frame.pack(pady=10)
+    def _post_poll_ui_refresh(self):
+        self.display_printer_list()
 
-ctk.CTkButton(button_frame, text="Add / Update Printer", command=add_or_update).pack(side="left", padx=10)
-ctk.CTkButton(button_frame, text="Clear Fields", command=clear_inputs).pack(side="left", padx=10)
+        selection = self.printer_listbox.curselection()
+        if selection:
+            selected_name = self.printer_listbox.get(selection)
+            for key, val in self.printer_data.items():
+                if val.get("name") == selected_name or key == selected_name:
+                    self.show_printer_details(key, val)
+                    break
 
-# Table frame
-table_frame = ctk.CTkScrollableFrame(app, width=850, height=400)
-table_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        self._polling_in_progress = False
+        self._spinner_running = False
+        self.spinner_canvas.delete("all")
+        self.refresh_button.configure(state="normal")
+        print("✅ Refresh complete.")
 
-refresh_table(table_frame, load_db())
+    # ---------------- UI Updates ----------------
+    def display_printer_list(self):
+        search_text = self.search_entry.get().lower()
+        self.printer_listbox.delete(0, "end")
+        for ip, info in self.printer_data.items():
+            if search_text in info.get("name", "").lower():
+                self.printer_listbox.insert("end", info.get("name", ip))
 
-app.mainloop()
+    def on_printer_select(self, event):
+        selection = self.printer_listbox.curselection()
+        if not selection:
+            return
+        selected_name = self.printer_listbox.get(selection)
+        for key, val in self.printer_data.items():
+            if val.get("name") == selected_name or key == selected_name:
+                self.show_printer_details(key, val)
+                break
+
+    def show_printer_details(self, key, data):
+        self.detail_text.delete("0.0", "end")
+        lines = [
+            f"Name: {data.get('name', key)}",
+            f"IP: {data.get('ip')}",
+            f"Model: {data.get('model', 'N/A')}",
+            f"Serial: {data.get('serial', 'N/A')}",
+            f"Last Updated: {data.get('timestamp', 'N/A')}",
+            "\nToner Cartridges:"
+        ]
+        for k, v in data.get("Toner Cartridges", {}).items():
+            lines.append(f"  • {k}: {v}")
+        lines.append("\nDrum Units:")
+        for k, v in data.get("Drum Units", {}).items():
+            lines.append(f"  • {k}: {v}")
+        lines.append("\nOther:")
+        for k, v in data.get("Other", {}).items():
+            lines.append(f"  • {k}: {v}")
+
+        self.detail_text.insert("0.0", "\n".join(lines))
+
+        # Update error panel with color coding
+        self.error_textbox.configure(state="normal")
+        self.error_textbox.delete("0.0", "end")
+        errors = data.get("Errors", {})
+        if not errors:
+            self.error_textbox.insert("0.0", "No active errors.")
+        else:
+            for desc, severity in errors.items():
+                color = {
+                    "Critical": "#FF4C4C",  # Red
+                    "Warning": "#FFA500",   # Orange
+                    "Info": "#A0A0A0"       # Grey
+                }.get(severity, "#FFFFFF")  # Default to white
+
+                # Tag per severity
+                tag_name = f"sev_{severity.lower()}"
+                self.error_textbox.tag_config(tag_name, foreground=color)
+                self.error_textbox.insert("end", f"{desc} ({severity})\n", tag_name)
+
+        self.error_textbox.configure(state="disabled")
+
+    # ---------------- Spinner ----------------
+    def animate_spinner(self):
+        if not self._spinner_running:
+            self.spinner_canvas.delete("all")
+            return
+        self.spinner_canvas.delete("all")
+        self.spinner_canvas.create_arc(
+            2, 2, 14, 14,
+            start=self.spinner_angle,
+            extent=270,
+            style="arc",
+            outline="#00BFFF",
+            width=2
+        )
+        self.spinner_angle = (self.spinner_angle + 10) % 360
+        self.after(50, self.animate_spinner)
+
+    # ---------------- Printer Management ----------------
+    def add_printer_popup(self):
+        popup = ctk.CTkToplevel(self)
+        popup.title("Add Printer")
+        popup.geometry("300x200")
+
+        ctk.CTkLabel(popup, text="Printer Name:").pack(pady=5)
+        name_entry = ctk.CTkEntry(popup)
+        name_entry.pack(pady=5)
+
+        ctk.CTkLabel(popup, text="Printer IP:").pack(pady=5)
+        ip_entry = ctk.CTkEntry(popup)
+        ip_entry.pack(pady=5)
+
+        def save_printer():
+            name = name_entry.get().strip()
+            ip = ip_entry.get().strip()
+            if not name or not ip:
+                return
+            self.printer_data[ip] = {
+                "name": name,
+                "ip": ip,
+                "model": "N/A",
+                "serial": "N/A",
+                "Toner Cartridges": {},
+                "Drum Units": {},
+                "Other": {},
+                "Errors": {},
+                "timestamp": "Never"
+            }
+            self.save_printer_data()
+            self.display_printer_list()
+            popup.destroy()
+
+        ctk.CTkButton(popup, text="Save", command=save_printer).pack(pady=10)
+
+    def delete_printer(self):
+        selection = self.printer_listbox.curselection()
+        if not selection:
+            return
+        selected_name = self.printer_listbox.get(selection)
+        to_delete = None
+        for ip, info in self.printer_data.items():
+            if info.get("name") == selected_name or ip == selected_name:
+                to_delete = ip
+                break
+        if to_delete:
+            self.printer_data.pop(to_delete, None)
+            self.save_printer_data()
+            self.display_printer_list()
+            self.detail_text.delete("0.0", "end")
+            self.error_textbox.delete("0.0", "end")
+
+
+if __name__ == "__main__":
+    app = TonerTrackGUI()
+    app.mainloop()
