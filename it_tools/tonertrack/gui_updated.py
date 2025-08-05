@@ -63,10 +63,30 @@ class TonerTrackGUI(ctk.CTk):
         )
         self.refresh_button.pack(side="left", padx=(0, 5))
 
-        # Spinner indicator
-        self.polling_label = ctk.CTkLabel(self.button_frame, text="")
-        self.polling_label.pack(side="left", padx=(5, 0))
+        bg_color = self.button_frame.cget("fg_color")
 
+        # If it's a tuple, choose the dark mode color
+        if isinstance(bg_color, tuple):
+            bg_color = bg_color[1]
+
+        # If it's "transparent", fall back to a default like white or systemWindowBackground
+        if bg_color == "transparent":
+            try:
+                bg_color = self.button_frame.master.cget("bg")  # try parent bg
+            except:
+                bg_color = "#2B2B2B"  # fallback to white
+
+
+        # Modern arc spinner (Canvas)
+        self.spinner_canvas = tk.Canvas(
+            self.button_frame,
+            width=16,
+            height=16,
+            highlightthickness=0,
+            bg=bg_color
+        )
+        self.spinner_canvas.pack(side="left", padx=(5, 0))
+        self.spinner_angle = 0
         self._spinner_running = False
 
         # Load printer data
@@ -75,15 +95,20 @@ class TonerTrackGUI(ctk.CTk):
     
     def animate_spinner(self):
         if not self._spinner_running:
-            self.polling_label.configure(text="")
+            self.spinner_canvas.delete("all")
             return
-        
-        spinner_chars = "|/-\\"
-        current_text = self.polling_label.cget("text")
-        next_index = (spinner_chars.find(current_text) + 1) % len(spinner_chars)
-        self.polling_label.configure(text=spinner_chars[next_index])
-        
-        self.after(150, self.animate_spinner)
+
+        self.spinner_canvas.delete("all")
+        self.spinner_canvas.create_arc(
+            2, 2, 14, 14,
+            start=self.spinner_angle,
+            extent=270,
+            style="arc",
+            outline="#00BFFF",  # modern blue
+            width=2
+        )
+        self.spinner_angle = (self.spinner_angle + 10) % 360
+        self.after(50, self.animate_spinner)
 
 
     def auto_poll_cycle(self):
@@ -235,10 +260,9 @@ class TonerTrackGUI(ctk.CTk):
     
     def refresh_all_printers(self):
         if self._polling_in_progress:
-            print("⚠ Stopping current poll to start a new one...")
+            print("⚠ Restarting poll...")
             self._spinner_running = False
             self._polling_in_progress = False
-            # Let thread exit gracefully before starting new poll
         
         self._polling_in_progress = True
         self._spinner_running = True
@@ -320,8 +344,9 @@ class TonerTrackGUI(ctk.CTk):
         # Always stop spinner & re-enable button
         self._polling_in_progress = False
         self._spinner_running = False
-        self.polling_label.configure(text="")
+        self.spinner_canvas.delete("all")
         self.refresh_button.configure(state="normal")
+
         print("✅ Refresh complete.")
 
 

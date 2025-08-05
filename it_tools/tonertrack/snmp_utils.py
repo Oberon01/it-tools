@@ -88,7 +88,7 @@ async def get_printer_status_async(ip):
         name = await snmp_get(ip, name_oid)
         level = await snmp_get(ip, level_oid)
         max_val = await snmp_get(ip, max_oid)
-        print(f"[DEBUG] Slot {i}: name={name}, level={level}, max={max_val}")
+#        print(f"[DEBUG] Slot {i}: name={name}, level={level}, max={max_val}")
         
         if name and level and max_val:
             try:
