@@ -56,3 +56,9 @@ It provides live SNMP-based monitoring of networked printers, including **toner/
     python gui.py
     ```
 
+---
+🔮 Potential Future Features
+- Low-toner and critical error notifications via email or Slack
+- Historical tracking and usage reports
+- Automatic printer discovery on the network
+- Export alerts and supply levels to CSV
