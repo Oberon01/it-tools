@@ -113,6 +113,7 @@ def user_set(
     sam: str = typer.Argument(...),
     email: Optional[str] = typer.Option(None, "--email"),
     title: Optional[str] = typer.Option(None, "--title"),
+    dept: Optional[str] = typer.Option(None, "--dept"),
     comp: Optional[str] = typer.Option(None, "--comp"),
     enable: bool = typer.Option(False, "--enable", help="Enable account"),
     disable: bool = typer.Option(False, "--disable", help="Disable account"),
@@ -128,6 +129,8 @@ def user_set(
         parts.append("-Enabled $true")
     if disable:
         parts.append("-Enabled $false")
+    if dept:
+        parts.append(f"-Department '{dept}'")
     run_ps(" ".join(parts))
     console.print(f"[green]Updated user {sam}")
 

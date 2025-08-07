@@ -1,14 +1,92 @@
 import customtkinter as ctk
 import tkinter as tk
 import threading
+from tkinter import messagebox, filedialog
 import json
+import shutil
 from datetime import datetime
-from snmp_utils import get_printer_status
+from it_tools.tonertrack.snmp_utils import get_printer_status
+import os 
+import sys
 
-DB_FILE = "printers_upgraded.json"
+if getattr(sys, 'frozen', False):
+    os.chdir(sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable))
+else:
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+def get_resource_path(filename):
+    """Return absolute path to resource (handles PyInstaller temp path)."""
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, filename)
+    return os.path.join(os.path.abspath("."), filename)
 
-class TonerTrackGUI(ctk.CTk):
+def get_appdata_path(filename):
+    """Return writable file path in %APPDATA%/TonerTrack/"""
+    appdata_dir = os.path.join(os.getenv("APPDATA"), "TonerTrack")
+    os.makedirs(appdata_dir, exist_ok=True)
+    return os.path.join(appdata_dir, filename)
+
+# Set global DB file path
+DB_FILE = get_appdata_path("printers_upgraded.json")
+
+# If DB doesn't exist, copy from bundled file
+if not os.path.exists(DB_FILE):
+    try:
+        default_db = get_resource_path("printers_upgraded.json")
+        shutil.copy(default_db, DB_FILE)
+        print(f"[INIT] Copied default DB to {DB_FILE}")
+    except Exception as e:
+        print(f"[ERROR] Failed to copy default printer DB: {e}")
+
+class TonerTrackMenuMixin:
+    def setup_menu(self):
+        menu_bar = tk.Menu(self)
+
+        # File menu
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="Import Printers", command=self.import_printer_data)
+        file_menu.add_command(label="Export Printers", command=self.export_printer_data)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.quit)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+
+        # Future features menu
+        tools_menu = tk.Menu(menu_bar, tearoff=0)
+        tools_menu.add_command(label="Settings (Coming Soon)")
+        tools_menu.add_command(label="Alert Thresholds (Coming Soon)")
+        menu_bar.add_cascade(label="Tools", menu=tools_menu)
+
+        self.config(menu=menu_bar)
+
+    def import_printers(self):
+        from tkinter import filedialog
+        file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
+        if file_path:
+            try:
+                with open(file_path, "r") as f:
+                    imported = json.load(f)
+                    self.printer_data.update(imported)
+                    self._save_data()
+                    self.display_printer_list()
+                    print("✅ Printers imported.")
+            except Exception as e:
+                messagebox.showerror("Import Error", str(e))
+
+    def export_printers(self):
+        from tkinter import filedialog
+        file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json")])
+        if file_path:
+            try:
+                with open(file_path, "w") as f:
+                    json.dump(self.printer_data, f, indent=2)
+                    print("✅ Printers exported.")
+            except Exception as e:
+                messagebox.showerror("Export Error", str(e))
+
+    def show_about_dialog(self):
+        messagebox.showinfo("About TonerTrack", "TonerTrack v1.0\nA local SNMP-based printer monitoring tool.")
+
+class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
     def __init__(self):
         super().__init__()
         self.title("TonerTrack")
@@ -23,8 +101,10 @@ class TonerTrackGUI(ctk.CTk):
         self.display_printer_list()
 
         # Start auto-poll after 2 seconds, repeat every 5 minutes
-        self.auto_poll_interval = 5 * 60 * 1000
+        self.auto_poll_interval = 2 * 60 * 1000
         self.after(2000, self.auto_poll_cycle)
+
+        self._prompt_initial_import()
 
     # ---------------- Layout ----------------
     def build_layout(self):
@@ -89,6 +169,23 @@ class TonerTrackGUI(ctk.CTk):
         )
         self.spinner_canvas.pack(side="left", padx=(5, 0))
 
+        # Menu Bar
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        # File Menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Import Printers", command=self.import_printers)
+        file_menu.add_command(label="Export Printers", command=self.export_printers)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.quit)
+        menubar.add_cascade(label="File", menu=file_menu)
+
+        # Help Menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="About", command=self.show_about_dialog)
+        menubar.add_cascade(label="Help", menu=help_menu)
+
     # ---------------- Data Handling ----------------
     def load_printer_data(self):
         try:
@@ -100,6 +197,24 @@ class TonerTrackGUI(ctk.CTk):
     def save_printer_data(self):
         with open(DB_FILE, "w") as f:
             json.dump(self.printer_data, f, indent=2)
+
+    def _save_data(self):
+        try:
+            with open(DB_FILE, "w") as f:
+                json.dump(self.printer_data, f, indent=2)
+            print("💾 Printer data saved.")
+        except Exception as e:
+            print(f"❌ Failed to save data: {e}")
+
+    def _prompt_initial_import(self):
+        if not self.printer_data:  # Checks in-memory data, not file content directly
+            response = messagebox.askyesno(
+                "Import Printers",
+                "No printers are currently configured. Would you like to import them from a file?"
+            )
+            if response:
+                self.import_printer_data()
+
 
     # ---------------- Polling ----------------
     def refresh_all_printers(self):
@@ -215,8 +330,9 @@ class TonerTrackGUI(ctk.CTk):
                 # Tag per severity
                 tag_name = f"sev_{severity.lower()}"
                 self.error_textbox.tag_config(tag_name, foreground=color)
-                self.error_textbox.insert("end", f"{desc} ({severity})\n", tag_name)
-
+                self.error_textbox.insert("end", f"{desc.upper()}\n\n", tag_name)
+#               self.error_textbox.insert("end", f"{severity.upper()}: {desc.upper()}\n\n", tag_name)
+                
         self.error_textbox.configure(state="disabled")
 
     # ---------------- Spinner ----------------
@@ -234,7 +350,7 @@ class TonerTrackGUI(ctk.CTk):
             width=2
         )
         self.spinner_angle = (self.spinner_angle + 10) % 360
-        self.after(50, self.animate_spinner)
+        self.after(25, self.animate_spinner)
 
     # ---------------- Printer Management ----------------
     def add_printer_popup(self):
@@ -289,7 +405,9 @@ class TonerTrackGUI(ctk.CTk):
             self.detail_text.delete("0.0", "end")
             self.error_textbox.delete("0.0", "end")
 
-
-if __name__ == "__main__":
+def main():
     app = TonerTrackGUI()
     app.mainloop()
+
+if __name__ == "__main__":
+    main()
