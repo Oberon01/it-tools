@@ -8,6 +8,7 @@ from datetime import datetime
 from it_tools.tonertrack.snmp_utils import get_printer_status
 import os 
 import sys
+import time
 
 if getattr(sys, 'frozen', False):
     os.chdir(sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(sys.executable))
@@ -101,7 +102,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.display_printer_list()
 
         # Start auto-poll after 2 seconds, repeat every 5 minutes
-        self.auto_poll_interval = 2 * 60 * 1000
+        self.auto_poll_interval = 5 * 60 * 1000
         self.after(2000, self.auto_poll_cycle)
 
         self._prompt_initial_import()
@@ -121,9 +122,9 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.search_entry.bind("<KeyRelease>", lambda e: self.display_printer_list())
 
         # Printer listbox
-        self.printer_listbox = tk.Listbox(self.left_frame, height=20)
-        self.printer_listbox.pack(padx=10, pady=5, fill="both", expand=True)
-        self.printer_listbox.bind("<<ListboxSelect>>", self.on_printer_select)
+        self.printer_listbox_frame = ctk.CTkScrollableFrame(self.left_frame)
+        self.printer_listbox_frame.pack(fill="both", expand=True)
+        self.printer_listbox_frame.bind("<<ListboxSelect>>", self.on_printer_select)
 
         # Add/Delete buttons
         self.add_button = ctk.CTkButton(self.left_frame, text="Add Printer", command=self.add_printer_popup)
@@ -186,6 +187,8 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         help_menu.add_command(label="About", command=self.show_about_dialog)
         menubar.add_cascade(label="Help", menu=help_menu)
 
+        self._start_hot_error_watcher()
+
     # ---------------- Data Handling ----------------
     def load_printer_data(self):
         try:
@@ -215,6 +218,22 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             if response:
                 self.import_printers()
 
+    def _update_printer_data(self, ip, status):
+        """Update printer entry for the given IP with new SNMP status info."""
+        if ip not in self.printer_data:
+            return
+
+        self.printer_data[ip].update({
+            "model": status.get("Model", self.printer_data[ip].get("model", "N/A")),
+            "serial": status.get("Serial Number", self.printer_data[ip].get("serial", "N/A")),
+            "Toner Cartridges": status.get("Toner Cartridges", {}),
+            "Drum Units": status.get("Drum Units", {}),
+            "Other": status.get("Other", {}),
+            "Errors": status.get("Errors", {}),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        self.save_printer_data()
 
     # ---------------- Polling ----------------
     def refresh_all_printers(self):
@@ -233,12 +252,36 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.refresh_all_printers()
         self.after(self.auto_poll_interval, self.auto_poll_cycle)
 
+    def _start_hot_error_watcher(self, interval=45):
+        def _watch_errors():
+            while True:
+                time.sleep(interval)
+                for ip in list(self.hot_error_ips):
+                    try:
+                        from snmp_utils import get_printer_status
+                        status = get_printer_status(ip)
+                        if not status.get("errors"):
+                            self.hot_error_ips.discard(ip)
+                        self._update_printer_data(ip, status)
+                    except Exception as e:
+                        print(f"[HotWatcher] Error polling {ip}: {e}")
+
+                # GUI refresh (from main thread)
+                self.after(500, self._post_poll_ui_refresh)
+
+        threading.Thread(target=_watch_errors, daemon=True).start()
+
     def _poll_all_printers(self):
+        self.hot_errors_ips = set()
         updated_data = {}
         for ip, data in self.printer_data.items():
             print(f"📡 Polling {ip}...")
             try:
                 status = get_printer_status(ip)
+                if status.get("errors"):
+                    self.hot_errors_ips.add(ip)
+                else:
+                    self.hot_errors_ips.discard(ip)
                 updated_data[ip] = {
                     **data,
                     "model": status.get("Model"),
@@ -248,6 +291,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                     "Other": status.get("Other", {}),
                     "Errors": status.get("Errors", {}),
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": self._evaluate_status(status),
                 }
             except Exception as e:
                 print(f"❌ Failed to poll {ip}: {e}")
@@ -256,10 +300,27 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.printer_data = updated_data
         self.save_printer_data()
         self.after(100, self._post_poll_ui_refresh)
+    
+    def _evaluate_status(self, printer_info):
+        # Default status
+        status = "OK"
+        # Check for SNMP error messages
+        if printer_info.get("errors"):
+            return "Error"
+        # Check toner/drum levels
+        for level_dict in [printer_info.get("Toner Cartridges", {}), printer_info.get("Drum Units", {})]:
+            for val in level_dict.values():
+                try:
+                    if isinstance(val, str) and val.endswith("%"):
+                        percent = int(val.rstrip("%"))
+                        if percent < 20:
+                            status = "Warning"
+                except:
+                    continue
+        return status
 
     def _post_poll_ui_refresh(self):
         self.display_printer_list()
-
         selection = self.printer_listbox.curselection()
         if selection:
             selected_name = self.printer_listbox.get(selection)
@@ -276,21 +337,52 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
 
     # ---------------- UI Updates ----------------
     def display_printer_list(self):
-        search_text = self.search_entry.get().lower()
-        self.printer_listbox.delete(0, "end")
-        for ip, info in self.printer_data.items():
-            if search_text in info.get("name", "").lower():
-                self.printer_listbox.insert("end", info.get("name", ip))
+        # Clear previous widgets
+        for widget in self.printer_listbox_frame.winfo_children():
+            widget.destroy()
+
+        query = self.search_entry.get().lower()
+
+        for idx, (key, val) in enumerate(self.printer_data.items()):
+            name = val.get("name", key)
+            if query and query not in name.lower():
+                continue  # Skip if query doesn't match printer name
+
+            status = val.get("status", "Unknown")
+
+            color = {
+                "OK": "#3adb76",       # Green
+                "Warning": "#ffae42",  # Orange
+                "Error": "#ff5c5c",    # Red
+            }.get(status, "#9e9e9e")   # Gray
+
+            # Container frame
+            item_frame = ctk.CTkFrame(self.printer_listbox_frame, fg_color="transparent")
+            item_frame.pack(fill="x", padx=5, pady=2)
+
+            # Color dot
+            canvas = tk.Canvas(item_frame, width=12, height=12, highlightthickness=0, bg="#2a2a2a", bd=0)
+            canvas.create_oval(2, 2, 10, 10, fill=color, outline=color)
+            canvas.pack(side="left", padx=(0, 5))
+
+            # Printer name as button
+            btn = ctk.CTkButton(
+                item_frame, text=name, width=180,
+                fg_color="transparent", text_color="white",
+                hover_color="#2a2a2a", anchor="w",
+                command=lambda k=key, d=val: self.show_printer_details(k, d)
+            )
+            btn.pack(side="left", fill="x", expand=True)
+
 
     def on_printer_select(self, event):
         selection = self.printer_listbox.curselection()
-        if not selection:
-            return
-        selected_name = self.printer_listbox.get(selection)
-        for key, val in self.printer_data.items():
-            if val.get("name") == selected_name or key == selected_name:
-                self.show_printer_details(key, val)
-                break
+        if selection:
+            selected_name = self.printer_listbox.get(selection).lstrip("🟢🟡🔴⚪ ").strip()
+            for key, val in self.printer_data.items():
+                if val.get("name") == selected_name or key == selected_name:
+                    self.show_printer_details(key, val)
+                    break
 
     def show_printer_details(self, key, data):
         self.detail_text.delete("0.0", "end")
