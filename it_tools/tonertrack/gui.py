@@ -213,7 +213,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                 "No printers are currently configured. Would you like to import them from a file?"
             )
             if response:
-                self.import_printer_data()
+                self.import_printers()
 
 
     # ---------------- Polling ----------------
