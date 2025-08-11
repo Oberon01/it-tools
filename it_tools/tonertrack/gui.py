@@ -100,6 +100,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.load_printer_data()
         self.build_layout()
         self.display_printer_list()
+        self.selected_key = None
 
         # Start auto-poll after 2 seconds, repeat every 5 minutes
         self.auto_poll_interval = 5 * 60 * 1000
@@ -172,7 +173,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
 
         # Menu Bar
         menubar = tk.Menu(self)
-        self.config(menu=menubar)
+        self.config(menu=menubar, bg="#2a2a2a")
 
         # File Menu
         file_menu = tk.Menu(menubar, tearoff=0)
@@ -187,6 +188,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         help_menu.add_command(label="About", command=self.show_about_dialog)
         menubar.add_cascade(label="Help", menu=help_menu)
 
+        self.hot_errors_ips = set()
         self._start_hot_error_watcher()
 
     # ---------------- Data Handling ----------------
@@ -230,10 +232,15 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             "Drum Units": status.get("Drum Units", {}),
             "Other": status.get("Other", {}),
             "Errors": status.get("Errors", {}),
+            "Total Pages Printed": status.get("Total pages", {}),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
         self.save_printer_data()
+
+    def _set_selection(self, key):
+        self._selected_key = key
+        self.show_printer_details(key, self.printer_data[key])
 
     # ---------------- Polling ----------------
     def refresh_all_printers(self):
@@ -256,12 +263,12 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         def _watch_errors():
             while True:
                 time.sleep(interval)
-                for ip in list(self.hot_error_ips):
+                for ip in list(self.hot_errors_ips):
                     try:
-                        from snmp_utils import get_printer_status
+                        from it_tools.tonertrack.snmp_utils import get_printer_status
                         status = get_printer_status(ip)
-                        if not status.get("errors"):
-                            self.hot_error_ips.discard(ip)
+                        if not status.get("Errors"):
+                            self.hot_errors_ips.discard(ip)
                         self._update_printer_data(ip, status)
                     except Exception as e:
                         print(f"[HotWatcher] Error polling {ip}: {e}")
@@ -278,7 +285,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             print(f"📡 Polling {ip}...")
             try:
                 status = get_printer_status(ip)
-                if status.get("errors"):
+                if status.get("Errors"):
                     self.hot_errors_ips.add(ip)
                 else:
                     self.hot_errors_ips.discard(ip)
@@ -305,7 +312,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         # Default status
         status = "OK"
         # Check for SNMP error messages
-        if printer_info.get("errors"):
+        if printer_info.get("Errors"):
             return "Error"
         # Check toner/drum levels
         for level_dict in [printer_info.get("Toner Cartridges", {}), printer_info.get("Drum Units", {})]:
@@ -321,13 +328,6 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
 
     def _post_poll_ui_refresh(self):
         self.display_printer_list()
-        selection = self.printer_listbox.curselection()
-        if selection:
-            selected_name = self.printer_listbox.get(selection)
-            for key, val in self.printer_data.items():
-                if val.get("name") == selected_name or key == selected_name:
-                    self.show_printer_details(key, val)
-                    break
 
         self._polling_in_progress = False
         self._spinner_running = False
@@ -370,19 +370,18 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                 item_frame, text=name, width=180,
                 fg_color="transparent", text_color="white",
                 hover_color="#2a2a2a", anchor="w",
-                command=lambda k=key, d=val: self.show_printer_details(k, d)
+                command=lambda k=key: self._set_selection(k)
             )
             btn.pack(side="left", fill="x", expand=True)
 
 
-    def on_printer_select(self, event):
-        selection = self.printer_listbox.curselection()
-        if selection:
-            selected_name = self.printer_listbox.get(selection).lstrip("🟢🟡🔴⚪ ").strip()
-            for key, val in self.printer_data.items():
-                if val.get("name") == selected_name or key == selected_name:
-                    self.show_printer_details(key, val)
-                    break
+    def on_printer_select(self, event=None):
+        key = getattr(self, "_selected_key", None)
+        if not key:
+            return
+        info = self.printer_data.get(key)
+        if info:
+            self.show_printer_details(key, info)
 
     def show_printer_details(self, key, data):
         self.detail_text.delete("0.0", "end")
@@ -403,6 +402,10 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         for k, v in data.get("Other", {}).items():
             lines.append(f"  • {k}: {v}")
 
+        # Add Usage Statistics
+        usage_stats = data.get("Total Pages Printed", "N/A")
+        lines.append("\nUsage Statistics:")
+        lines.append(f"  • Total Pages Printed: {usage_stats}")
         self.detail_text.insert("0.0", "\n".join(lines))
 
         # Update error panel with color coding
@@ -442,14 +445,38 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             width=2
         )
         self.spinner_angle = (self.spinner_angle + 10) % 360
-        self.after(25, self.animate_spinner)
+        self.after(50, self.animate_spinner)
 
     # ---------------- Printer Management ----------------
     def add_printer_popup(self):
         popup = ctk.CTkToplevel(self)
         popup.title("Add Printer")
-        popup.geometry("300x200")
 
+        popup_width = 300
+        popup_height = 200
+
+        # Ensure the geometry information is up to date
+        self.update_idletasks()
+
+        # Get main window position
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_width = self.winfo_width()
+        main_height = self.winfo_height()
+
+        # Center the popup relative to the main window
+        x = main_x + (main_width - popup_width) // 2
+        y = main_y + (main_height - popup_height) // 2
+
+        popup.geometry(f"{popup_width}x{popup_height}+{x}+{y}")
+        popup.resizable(False, False)
+
+        popup.lift()
+        popup.focus_force()
+        popup.grab_set()
+        popup.transient(self)
+
+        # Form contents
         ctk.CTkLabel(popup, text="Printer Name:").pack(pady=5)
         name_entry = ctk.CTkEntry(popup)
         name_entry.pack(pady=5)
@@ -480,22 +507,21 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
 
         ctk.CTkButton(popup, text="Save", command=save_printer).pack(pady=10)
 
+
     def delete_printer(self):
-        selection = self.printer_listbox.curselection()
-        if not selection:
+        if not hasattr(self, "_selected_key") or not self._selected_key:
             return
-        selected_name = self.printer_listbox.get(selection)
-        to_delete = None
-        for ip, info in self.printer_data.items():
-            if info.get("name") == selected_name or ip == selected_name:
-                to_delete = ip
-                break
-        if to_delete:
-            self.printer_data.pop(to_delete, None)
-            self.save_printer_data()
-            self.display_printer_list()
-            self.detail_text.delete("0.0", "end")
-            self.error_textbox.delete("0.0", "end")
+
+        self.printer_data.pop(self._selected_key, None)
+        self.save_printer_data()
+        self.display_printer_list()
+
+        self.detail_text.delete("0.0", "end")
+        self.error_textbox.configure(state="normal")
+        self.error_textbox.delete("0.0", "end")
+        self.error_textbox.configure(state="disabled")
+
+        self._selected_key = None
 
 def main():
     app = TonerTrackGUI()

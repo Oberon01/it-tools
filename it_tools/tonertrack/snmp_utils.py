@@ -133,6 +133,11 @@ async def get_printer_status_async(ip):
     results["Other"] = misc_levels
     results["Errors"] = errors
 
+    # Get total page count
+    page_count_oid = "1.3.6.1.2.1.43.10.2.1.4.1.1"
+    page_count = await snmp_get(ip, page_count_oid)
+    results["Total Pages Printed"] = page_count or "N/A"
+    
     return results
 
 def get_printer_status(ip):

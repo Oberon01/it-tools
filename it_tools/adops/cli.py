@@ -78,7 +78,7 @@ def user_get(
     sam: str = typer.Argument(..., help="SAMAccountName"),
     bulk: bool = typer.Option(False, "--bulk", help="Retrieve accounts in bulk")
     ):
-    out = run_ps(f"Get-ADUser -Identity '{sam}' -Properties mail,title,Enabled,Manager | Format-List")
+    out = run_ps(f"Get-ADUser -Identity '{sam}' -Properties mail,title,Enabled,Manager,Office,Company | Format-List")
     print(f"\nAccount Information: {sam.upper()}\n\n{out}\n")
 
 @user_cli.command("new")
@@ -90,9 +90,8 @@ def user_new(
     title: str = typer.Option("", "--title", help="User's Job Role"),
     manager: str = typer.Option("", "--manager", help="Reporting Manager (Use SamAccountName)"),
     dept: str = typer.Option("", "--dept", help="User's Department"),
-    comp: str = typer.Option("", "--comp", help="User's Company (BMSC or Alliance)")
 ):
-    parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}' -EmailAddress '{sam}@beautymanufacture.com' -GivenName '{name.split(" ")[0]}' -Surname '{name.split(" ")[1]}' -DisplayName '{name}' -UserPrincipalName '{sam}@beautymanufacture.com' -Enabled $true -Credential {env('AD_CRED')} -AccountPassword (ConvertTo-SecureString -AsPlainText 'Summerful7!' -Force)"]
+    parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}' -EmailAddress '{sam}@beautymanufacture.com' -GivenName '{name.split(" ")[0]}' -Surname '{name.split(" ")[1]}' -DisplayName '{name}' -UserPrincipalName '{sam}@beautymanufacture.com' -Company 'BMSC' -Office 'BMSC' -Enabled $true -Credential {env('AD_CRED')} -AccountPassword (ConvertTo-SecureString -AsPlainText 'Summerful7!' -Force)"]
     if ou:
         parts.append(f"-Path 'OU=B1-{ou},OU=Active,OU=BMSC1,OU=Domain Users,DC=bmsc1,DC=local'")
     # if email:
