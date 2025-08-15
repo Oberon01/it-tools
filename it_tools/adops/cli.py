@@ -6,8 +6,8 @@ MVS (minimum viable scope)
 -------------------------
 • **User commands**
   - `user get  <sam>`      (Get-ADUser)
-  - `user new  <sam>`      (New-ADUser)  — prompts for name, OU, etc.
-  - `user set  <sam>`      (Set-ADUser)  — --email, --title, --enabled/--disabled
+  - `user new  <sam>`      (New-ADUser)  - prompts for name, OU, etc.
+  - `user set  <sam>`      (Set-ADUser)  - --email, --title, --enabled/--disabled
   - `user del  <sam>`      (Remove-ADUser)
 
 • **Group commands**
@@ -93,7 +93,7 @@ def user_new(
 ):
     parts = [f"New-ADUser -SamAccountName '{sam}' -Name '{name}' -EmailAddress '{sam}@beautymanufacture.com' -GivenName '{name.split(" ")[0]}' -Surname '{name.split(" ")[1]}' -DisplayName '{name}' -UserPrincipalName '{sam}@beautymanufacture.com' -Company 'BMSC' -Office 'BMSC' -Enabled $true -Credential {env('AD_CRED')} -AccountPassword (ConvertTo-SecureString -AsPlainText 'Summerful7!' -Force)"]
     if ou:
-        parts.append(f"-Path 'OU=B1-{ou},OU=Active,OU=BMSC1,OU=Domain Users,DC=bmsc1,DC=local'")
+        parts.append(f"-Path 'OU=B1 {ou},OU=Active,OU=BMSC1,OU=Domain Users,DC=bmsc1,DC=local'")
     # if email:
         # parts.append(f"-EmailAddress '{sam}@beautymanufacture.com'")
     if title:
