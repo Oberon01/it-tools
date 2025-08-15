@@ -232,7 +232,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             "Drum Units": status.get("Drum Units", {}),
             "Other": status.get("Other", {}),
             "Errors": status.get("Errors", {}),
-            "Total Pages Printed": status.get("Total pages", {}),
+            "Total Pages Printed": status.get("Total Pages Printed", self.printer_data[ip].get("Total Pages Printed", "N/A")),
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
@@ -309,22 +309,51 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.after(100, self._post_poll_ui_refresh)
     
     def _evaluate_status(self, printer_info):
-        # Default status
-        status = "OK"
-        # Check for SNMP error messages
-        if printer_info.get("Errors"):
-            return "Error"
-        # Check toner/drum levels
-        for level_dict in [printer_info.get("Toner Cartridges", {}), printer_info.get("Drum Units", {})]:
-            for val in level_dict.values():
-                try:
-                    if isinstance(val, str) and val.endswith("%"):
-                        percent = int(val.rstrip("%"))
-                        if percent < 20:
-                            status = "Warning"
-                except:
-                    continue
-        return status
+        # --- helpers ---
+        def is_paper_out(desc: str) -> bool:
+            d = str(desc).lower()
+            return (
+                "no paper" in d
+                or "paper out" in d
+                or ("paper" in d and ("out" in d or "empty" in d or "tray" in d))
+                or "input tray empty" in d
+            )
+
+        def is_toner_low_desc(desc: str) -> bool:
+            d = str(desc).lower()
+            # covers "toner is low (black).", "replace toner soon", etc.
+            return ("toner" in d) and ("low" in d or "replace" in d or "%")
+
+        def any_percent_leq_5(d: dict) -> bool:
+            for v in (d or {}).values():
+                if isinstance(v, str) and v.endswith("%"):
+                    try:
+                        if int(v.rstrip("%")) <= 5:
+                            return True
+                    except:
+                        pass
+            return False
+
+        # --- evaluate errors table ---
+        errs = printer_info.get("Errors") or {}
+        # If any error is NOT paper-out or toner-low, it's a real error.
+        for desc in errs.keys():
+            if not (is_paper_out(desc) or is_toner_low_desc(desc)):
+                return "Error"
+
+        # At this point, errors (if any) are only paper-out and/or toner-low style.
+        # --- evaluate consumable percentages (toner/drum/other) ---
+        low_consumable = (
+            any_percent_leq_5(printer_info.get("Toner Cartridges", {})) or
+            any_percent_leq_5(printer_info.get("Drum Units", {})) or
+            any_percent_leq_5(printer_info.get("Other", {}))
+        )
+
+        # If there are only paper-out / toner-low messages, or ≤5% levels, that's a Warning.
+        if errs or low_consumable:
+            return "Warning"
+
+        return "OK"
 
     def _post_poll_ui_refresh(self):
         self.display_printer_list()
@@ -348,7 +377,7 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             if query and query not in name.lower():
                 continue  # Skip if query doesn't match printer name
 
-            status = val.get("status", "Unknown")
+            status = self._evaluate_status(val)
 
             color = {
                 "OK": "#3adb76",       # Green
@@ -416,17 +445,23 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             self.error_textbox.insert("0.0", "No active errors.")
         else:
             for desc, severity in errors.items():
-                color = {
-                    "Critical": "#FF4C4C",  # Red
-                    "Warning": "#FFA500",   # Orange
-                    "Info": "#A0A0A0"       # Grey
-                }.get(severity, "#FFFFFF")  # Default to white
+                d_lower = desc.lower()
 
-                # Tag per severity
-                tag_name = f"sev_{severity.lower()}"
+                # Force paper-out and toner-low style to orange
+                if (
+                    "no paper" in d_lower
+                    or "paper out" in d_lower
+                    or ("paper" in d_lower and ("out" in d_lower or "empty" in d_lower or "tray" in d_lower))
+                    or "input tray empty" in d_lower
+                    or ("toner" in d_lower and ("low" in d_lower or "replace" in d_lower or "%" in d_lower))
+                ):
+                    color = "#FFA500"  # Orange
+                else:
+                    color = "#FF4C4C"  # Red for all other alerts
+
+                tag_name = f"alert_color_{color.strip('#')}"
                 self.error_textbox.tag_config(tag_name, foreground=color)
                 self.error_textbox.insert("end", f"{desc.upper()}\n\n", tag_name)
-#               self.error_textbox.insert("end", f"{severity.upper()}: {desc.upper()}\n\n", tag_name)
                 
         self.error_textbox.configure(state="disabled")
 
