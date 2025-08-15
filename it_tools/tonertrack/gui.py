@@ -98,12 +98,13 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.spinner_angle = 0
 
         self.load_printer_data()
+        self.filter_var = tk.StringVar(value="All")
         self.build_layout()
         self.display_printer_list()
         self.selected_key = None
 
         # Start auto-poll after 2 seconds, repeat every 5 minutes
-        self.auto_poll_interval = 5 * 60 * 1000
+        self.auto_poll_interval = 2 * 60 * 1000
         self.after(2000, self.auto_poll_cycle)
 
         self._prompt_initial_import()
@@ -121,6 +122,15 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         self.search_entry = ctk.CTkEntry(self.left_frame, placeholder_text="Search printers...")
         self.search_entry.pack(padx=10, pady=(10, 5), fill="x")
         self.search_entry.bind("<KeyRelease>", lambda e: self.display_printer_list())
+
+        # Filter dropdown (All / OK / Warning / Error)
+        self.filter_menu = ctk.CTkOptionMenu(
+            self.left_frame,  # or the same parent as your search field
+            values=["All", "OK", "Warning", "Error"],
+            variable=self.filter_var,
+            command=lambda _: self.display_printer_list()
+        )
+        self.filter_menu.pack(padx=10,pady=(0,10), fill="x")  # adjust geometry to your layout
 
         # Printer listbox
         self.printer_listbox_frame = ctk.CTkScrollableFrame(self.left_frame)
@@ -302,14 +312,26 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                 }
             except Exception as e:
                 print(f"❌ Failed to poll {ip}: {e}")
-                updated_data[ip] = {**data, "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                updated_data[ip] = {
+                    **data, 
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "status": "Offline",
+                }
 
         self.printer_data = updated_data
         self.save_printer_data()
         self.after(100, self._post_poll_ui_refresh)
     
     def _evaluate_status(self, printer_info):
-        # --- helpers ---
+        """
+        Status rules:
+        - Paper-out alerts do NOT affect status (ignored for status).
+        - Toner warnings => Warning.
+        - Any other alerts => Error.
+        - If none of the above => OK.
+        """
+        if printer_info.get("status") == "Offline":
+            return "Offline"
         def is_paper_out(desc: str) -> bool:
             d = str(desc).lower()
             return (
@@ -319,40 +341,40 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                 or "input tray empty" in d
             )
 
-        def is_toner_low_desc(desc: str) -> bool:
+        def is_toner_warning_desc(desc: str) -> bool:
             d = str(desc).lower()
-            # covers "toner is low (black).", "replace toner soon", etc.
-            return ("toner" in d) and ("low" in d or "replace" in d or "%")
+            # treat toner-related alerts as warnings (e.g., "toner is low", "replace toner soon")
+            return ("toner" in d) and ("low" in d or "replace" in d or "%" in d)
 
-        def any_percent_leq_5(d: dict) -> bool:
+        def any_toner_percent_warning(d: dict) -> bool:
+            # consider toner/drum/other percentages as warnings if they indicate low levels
             for v in (d or {}).values():
                 if isinstance(v, str) and v.endswith("%"):
                     try:
+                        # use your desired threshold; keep 5 if you want it strict
                         if int(v.rstrip("%")) <= 5:
                             return True
                     except:
                         pass
             return False
 
-        # --- evaluate errors table ---
         errs = printer_info.get("Errors") or {}
-        # If any error is NOT paper-out or toner-low, it's a real error.
+
+        # If there's any non-paper, non-toner-warning alert, it's an Error
         for desc in errs.keys():
-            if not (is_paper_out(desc) or is_toner_low_desc(desc)):
+            if not is_paper_out(desc) and not is_toner_warning_desc(desc):
                 return "Error"
 
-        # At this point, errors (if any) are only paper-out and/or toner-low style.
-        # --- evaluate consumable percentages (toner/drum/other) ---
-        low_consumable = (
-            any_percent_leq_5(printer_info.get("Toner Cartridges", {})) or
-            any_percent_leq_5(printer_info.get("Drum Units", {})) or
-            any_percent_leq_5(printer_info.get("Other", {}))
-        )
-
-        # If there are only paper-out / toner-low messages, or ≤5% levels, that's a Warning.
-        if errs or low_consumable:
+        # Toner warning if any toner/drum/other % is low OR toner-warning descs present
+        if (
+            any_toner_percent_warning(printer_info.get("Toner Cartridges", {}))
+            or any_toner_percent_warning(printer_info.get("Drum Units", {}))
+            or any_toner_percent_warning(printer_info.get("Other", {}))
+            or any(is_toner_warning_desc(d) for d in errs.keys())
+        ):
             return "Warning"
 
+        # Paper-out-only alerts don’t affect status
         return "OK"
 
     def _post_poll_ui_refresh(self):
@@ -375,15 +397,23 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
         for idx, (key, val) in enumerate(self.printer_data.items()):
             name = val.get("name", key)
             if query and query not in name.lower():
-                continue  # Skip if query doesn't match printer name
+                continue
 
+            # NEW: always compute current status from live data
             status = self._evaluate_status(val)
 
+            # NEW: skip rows that don't match the filter
+            current_filter = self.filter_var.get()
+            if current_filter != "All" and status != current_filter:
+                continue
+
+            # (existing color mapping + row creation stays the same)
             color = {
-                "OK": "#3adb76",       # Green
-                "Warning": "#ffae42",  # Orange
-                "Error": "#ff5c5c",    # Red
-            }.get(status, "#9e9e9e")   # Gray
+                "OK": "#3adb76",
+                "Warning": "#ffae42",
+                "Error": "#ff5c5c",
+                "Offline": "#9e9e9e",
+            }.get(status, "#9e9e9e")
 
             # Container frame
             item_frame = ctk.CTkFrame(self.printer_listbox_frame, fg_color="transparent")
@@ -445,23 +475,28 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
             self.error_textbox.insert("0.0", "No active errors.")
         else:
             for desc, severity in errors.items():
-                d_lower = desc.lower()
+                d = str(desc).lower()
 
-                # Force paper-out and toner-low style to orange
+                # Paper-out: white
                 if (
-                    "no paper" in d_lower
-                    or "paper out" in d_lower
-                    or ("paper" in d_lower and ("out" in d_lower or "empty" in d_lower or "tray" in d_lower))
-                    or "input tray empty" in d_lower
-                    or ("toner" in d_lower and ("low" in d_lower or "replace" in d_lower or "%" in d_lower))
+                    "no paper" in d
+                    or "paper out" in d
+                    or ("paper" in d and ("out" in d or "empty" in d or "tray" in d))
+                    or "input tray empty" in d
                 ):
-                    color = "#FFA500"  # Orange
-                else:
-                    color = "#FF4C4C"  # Red for all other alerts
+                    color = "#FFFFFF"  # white
 
-                tag_name = f"alert_color_{color.strip('#')}"
-                self.error_textbox.tag_config(tag_name, foreground=color)
-                self.error_textbox.insert("end", f"{desc.upper()}\n\n", tag_name)
+                # Toner warnings: orange
+                elif ("toner" in d) and ("low" in d or "replace" in d or "%" in d):
+                    color = "#FFA500"  # orange
+
+                # Everything else: red (true errors)
+                else:
+                    color = "#FF4C4C"  # red
+
+                tag = f"alert_{color.strip('#')}"
+                self.error_textbox.tag_config(tag, foreground=color)
+                self.error_textbox.insert("end", f"{desc.upper()}\n\n", tag)
                 
         self.error_textbox.configure(state="disabled")
 
@@ -534,12 +569,14 @@ class TonerTrackGUI(ctk.CTk, TonerTrackMenuMixin):
                 "Drum Units": {},
                 "Other": {},
                 "Errors": {},
-                "timestamp": "Never"
+                "timestamp": "Never",
+                "status": "OK"  # Ensure status exists immediately
             }
             self.save_printer_data()
             self.display_printer_list()
             popup.destroy()
-
+            # Immediately poll the new printer so it’s active right away
+            threading.Thread(target=lambda: self._poll_all_printers(), daemon=True).start()
         ctk.CTkButton(popup, text="Save", command=save_printer).pack(pady=10)
 
 
